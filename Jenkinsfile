@@ -7,5 +7,11 @@ pipeline {
       }
     }
 
+    stage('Test') {
+      steps {
+        sh 'tidy -q -e test.html'
+      }
+    }
+
   }
 }
