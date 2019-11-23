@@ -1,0 +1,327 @@
+Description: >
+  Danilo Chaves - Capstone Project
+  11/30/2019
+  This template deploys a VPC, with a pair of public and private subnets spread 
+  across two Availabilty Zones. It deploys an Internet Gateway, with a default 
+  route on the public subnets. It deploys a pair of NAT Gateways (one in each AZ), 
+  and default routes for them in the private subnets.
+#-----------------DESCRIPTION END-----------------------#
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  InstanceType:
+        Description: 
+            "The EC2 instance type of general purpose"
+        Type: String
+        AllowedValues: [t2.medium, t3.small, t3.nano, t3.micro, t3.small, t3.medium, t3.large, t3.xlarge, t3.2xlarge]
+
+Resources:
+
+  LBSecGroup: 
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http and ssh requests to the load balancer
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        
+  JenkinsSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our hosts from local only
+      VpcId: 
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  WebAppSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our hosts from local only
+      VpcId: 
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  BastionServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH Connection Only
+      VpcId: 
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  WebAppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          #install docker
+          apt-get update -y
+          apt-get install unzip awscli -y
+          apt-get install apt-transport-https ca-certificates curl software-properties-common
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add –
+          add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu  $(lsb_release -cs)  stable" 
+          apt-get update
+          sudo apt-get install docker-ce
+          usermod -aG docker ubuntu
+      ImageId: ami-005bdb005fb00e791
+      InstanceType: !Ref "InstanceType"
+      KeyName: capstone
+      SecurityGroups:
+        - Ref: WebAppSecGroup
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: "20"
+
+  JenkinsEC2: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      ImageId: ami-005bdb005fb00e791
+      InstanceType: !Ref "InstanceType"
+      KeyName: capstone
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          #install Jenkins
+          sudo apt-get update
+          sudo apt install -y default-jdk
+          wget -q -O - https://pkg.jenkins.io/debian/jenkins.io.key | sudo apt-key add -
+          sudo sh -c 'echo deb https://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
+          sudo apt-get update
+          sudo apt-get install -y jenkins
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: "20"
+      NetworkInterfaces: 
+      - GroupSet: 
+          - !Ref JenkinsSecGroup
+        DeleteOnTermination: "true"
+        AssociatePublicIpAddress: "false"
+        DeviceIndex: "0"
+        SubnetId: "subnet-0009ed7ecb59e3709"
+
+  BastionEC2: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      ImageId: ami-005bdb005fb00e791
+      InstanceType: !Ref "InstanceType"
+      KeyName: capstone
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: "20"
+      NetworkInterfaces: 
+      - GroupSet: 
+          - !Ref BastionServerSecGroup
+        DeleteOnTermination: "true"
+        DeviceIndex: "0"
+        SubnetId: subnet-05e48c7befa0e19b7
+
+  WebAppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PRI1-SN"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PRI2-SN"
+      LaunchConfigurationName:
+        Ref: WebAppLaunchConfig
+      MinSize: "2"
+      MaxSize: "5"
+      TargetGroupARNs:
+        - Ref: WebAppTargetGroup
+
+  WebAppLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
+      SecurityGroups:
+        - Ref: LBSecGroup
+
+  ListenerLB:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: WebAppTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLB
+      Port: "80"
+      Protocol: HTTP
+
+  ListenerJenkins:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: 
+            Ref: JenkinsTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLB
+      Port: "8080"
+      Protocol: HTTP
+
+  ALBListenerRule: #APL = Application Load Balancer
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref WebAppTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref "ListenerLB"
+      Priority: 1
+
+  JenkinsListenerRule: #Application Load Balancer
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref JenkinsTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref "ListenerJenkins"
+      Priority: 2
+
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 35
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 30
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP #HTTP 200 code
+      UnhealthyThresholdCount: 5
+      VpcId: 
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+
+  JenkinsTargetGroup:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Properties:
+        HealthCheckIntervalSeconds: 35
+        HealthCheckPath: /
+        HealthCheckProtocol: HTTP
+        HealthCheckTimeoutSeconds: 30
+        HealthyThresholdCount: 2
+        Port: 8080
+        Protocol: HTTP #HTTP 200 code
+        UnhealthyThresholdCount: 5
+        VpcId: 
+          Fn::ImportValue:
+            !Sub "${EnvironmentName}-VPCID"
+  
+
+# #------------------RESOUCERS END------------------#
+
+# Outputs:
+#   VPC:
+#     Description: A reference to the created VPC
+#     Value: !Ref VPC #variable value
+#     Export:
+#       Name: !Sub ${EnvironmentName}-VPCID
+
+#   VPCPublicRouteTable:
+#     Description: Public Routing
+#     Value: !Ref PublicRouteTable
+#     Export:
+#       Name: !Sub ${EnvironmentName}-PUB-RT
+
+#   VPCPrivateRouteTable1:
+#     Description: Private Routing AZ1
+#     Value: !Ref PrivateRouteTable1
+#     Export:
+#       Name: !Sub ${EnvironmentName}-PRIV1-RT
+
+#   VPCPrivateRouteTable2:
+#     Description: Private Routing AZ2
+#     Value: !Ref PrivateRouteTable2
+#     Export:
+#       Name: !Sub ${EnvironmentName}-PRIV2-RT
+
+#   PublicSubnets:
+#     Description: A list of the public subnets
+#     Value: !Join [",", [!Ref PublicSubnet1, !Ref PublicSubnet2]]
+#     Export:
+#       Name: !Sub ${EnvironmentName}-PUB-NETS
+
+#   PrivateSubnets:
+#     Description: A list of the private subnets
+#     Value: !Join [",", [!Ref PrivateSubnet1, !Ref PrivateSubnet2]]
+#     Export:
+#       Name: !Sub ${EnvironmentName}-PRIV-NETS
+
+  # WebAppLoadBalancerDNSName:
+  #   Description: DNS name or Public URL of the Load Balancer
+  #   Value: !Join ["", ["http://", !GetAtt WebAppLB.DNSName]]
+  #   Export:
+  #     Name: !Sub ${EnvironmentName}-LB-DNSName
