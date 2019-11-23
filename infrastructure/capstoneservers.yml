@@ -90,6 +90,22 @@ Resources:
           ToPort: 65535
           CidrIp: 0.0.0.0/0
 
+  JenkinsEC2: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: ami-005bdb005fb00e791
+      KeyName: capstone
+      BlockDeviceMappings: 
+      - DeviceName: "/dev/sdm"
+        Ebs: 
+          VolumeType: "gp2"
+          Iops: "200"
+          DeleteOnTermination: "true"
+          VolumeSize: "20"
+      - DeviceName: "/dev/sdk"
+        NoDevice: {}
+      SecurityGroups: !Ref WebServerSecGroup
+
   WebAppLaunchConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
@@ -97,12 +113,14 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           #install docker
-          sudo apt-get update
-          sudo apt install -y default-jdk
-          wget -q -O - https://pkg.jenkins.io/debian/jenkins.io.key | sudo apt-key add -
-          sudo sh -c 'echo deb https://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
-          sudo apt-get update
-          sudo apt-get install -y jenkins
+          apt-get update -y
+          apt-get install unzip awscli -y
+          apt-get install apt-transport-https ca-certificates curl software-properties-common
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add –
+          add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu  $(lsb_release -cs)  stable" 
+          apt-get update
+          sudo apt-get install docker-ce
+          usermode -aG docker ubuntu
       ImageId: ami-005bdb005fb00e791
       InstanceType: !Ref "InstanceType"
       KeyName: capstone
@@ -141,8 +159,8 @@ Resources:
       - Fn::ImportValue: !Sub "${EnvironmentName}-PRI2-SN"
       LaunchConfigurationName:
         Ref: WebAppLaunchConfig
-      MinSize: "2"
-      MaxSize: "2"
+      MinSize: "1"
+      MaxSize: "1"
       TargetGroupARNs:
         - Ref: JenkinsTargetGroup
 
@@ -178,13 +196,13 @@ Resources:
       Port: "80"
       Protocol: HTTP
 
-    ListenerJenkins:
+  ListenerJenkins:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       DefaultActions:
         - Type: forward
           TargetGroupArn:
-            Ref: WebAppTargetGroup
+            Ref: JenkinsTargetGroup
       LoadBalancerArn:
         Ref: WebAppLB
       Port: "8080"
@@ -199,7 +217,7 @@ Resources:
       Conditions:
         - Field: path-pattern
           Values: [/]
-      ListenerArn: !Ref "Listener"
+      ListenerArn: !Ref "ListenerLB"
       Priority: 1
 
   JenkinsListenerRule: #Application Load Balancer
@@ -211,7 +229,7 @@ Resources:
       Conditions:
         - Field: path-pattern
           Values: [/]
-      ListenerArn: !Ref "Listener"
+      ListenerArn: !Ref "ListenerJenkins"
       Priority: 1
 
   WebAppTargetGroup:
@@ -284,8 +302,8 @@ Resources:
 #     Export:
 #       Name: !Sub ${EnvironmentName}-PRIV-NETS
 
-#   WebAppLoadBalancerDNSName:
-#     Description: DNS name or Public URL of the Load Balancer
-#     Value: !Join ["", ["http://", !GetAtt WebAppLB.DNSName]]
-#     Export:
-#       Name: !Sub ${EnvironmentName}-LB-DNSName
+  # WebAppLoadBalancerDNSName:
+  #   Description: DNS name or Public URL of the Load Balancer
+  #   Value: !Join ["", ["http://", !GetAtt WebAppLB.DNSName]]
+  #   Export:
+  #     Name: !Sub ${EnvironmentName}-LB-DNSName
