@@ -1,0 +1,14 @@
+- name: change route53
+  route53: 
+    state: present
+    zone: capstone.com
+    record: www.capstone.com
+    failover: PRIMARY
+    type: CNAME
+    ttl: 30
+    identifier: server1
+    private_zone: yes
+    overwrite: yes
+    value: "{{ NEW_ALIAS }}"
+    wait: yes
+    health_check: "f9244628-147d-4e36-8aec-f5a6f012a9c4"
